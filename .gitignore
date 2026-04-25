@@ -1,0 +1,102 @@
+# ------------------------------
+
+# General
+
+# ------------------------------
+
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# ------------------------------
+
+# React (Vite)
+
+# ------------------------------
+
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.*
+
+# Vite cache
+
+node_modules/.vite
+
+# ------------------------------
+
+# Backend (Node + TS)
+
+# ------------------------------
+
+backend/node_modules/
+backend/dist/
+backend/build/
+backend/.env
+backend/.env.*
+
+# TypeScript
+
+*.tsbuildinfo
+
+# ------------------------------
+
+# Testing
+
+# ------------------------------
+
+coverage/
+*.lcov
+
+# ------------------------------
+
+# Editors & IDEs
+
+# ------------------------------
+
+.vscode/
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# ------------------------------
+
+# Docker (if you add later)
+
+# ------------------------------
+
+docker-data/
+*.pid
+
+# ------------------------------
+
+# Secrets (IMPORTANT)
+
+# ------------------------------
+
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ------------------------------
+
+# Misc
+
+# ------------------------------
+
+.tmp/
+.cache/
+.eslintcache
