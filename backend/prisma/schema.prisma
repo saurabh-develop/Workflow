@@ -9,9 +9,58 @@ datasource db {
 }
 
 model User {
-  id    Int     @id @default(autoincrement())
-  email String  @unique
-  name  String
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  avatarUrl     String?
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  otpCodes      OtpCode[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider          String  // 'google' | 'github' | 'email'
+  providerAccountId String  // Google sub / GitHub id / user's email
+
+  // Only set for email+password accounts
+  passwordHash      String?
+
+  // OAuth tokens (store for potential API calls to provider)
+  accessToken       String?
+  refreshToken      String?
+  expiresAt         DateTime?
+
+  createdAt         DateTime @default(now())
+
+  @@unique([provider, providerAccountId]) // one account per provider per user
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique @default(cuid())
+  expiresAt DateTime
+  userAgent String?
+  ipAddress String?
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String   // hashed
+  purpose   String   // 'login' | 'verify_email' | 'password_reset'
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
 }
