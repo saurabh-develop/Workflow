@@ -1,7 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { Strategy as GitHubStrategy } from "passport-github2";
-import findOrCreateUser from "../../services/auth.service.js";
+import { findOrCreateUser } from "../../services/auth.service.js";
 
 passport.use(
   new GoogleStrategy(

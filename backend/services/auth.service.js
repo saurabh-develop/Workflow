@@ -79,17 +79,17 @@ export async function registerWithEmail(input) {
     );
     if (!hasEmailAccount) {
       const providers = existing.accounts.map((a) => a.provider);
-      return res.status(409).json({
-        error: "ACCOUNT_EXISTS_OAUTH",
+      throw {
+        code: "ACCOUNT_EXISTS_OAUTH",
         message: `An account with this email already exists via ${providers.join(", ")}.`,
         providers,
         suggestion: "LOGIN_WITH_OAUTH",
-      });
+      };
     }
-    return res.status(409).json({
-      error: "ACCOUNT_EXISTS",
+    throw {
+      code: "ACCOUNT_EXISTS",
       message: "Email already registered.",
-    });
+    };
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -123,36 +123,32 @@ export async function loginWithEmail(input) {
   });
 
   if (!user) {
-    return res
-      .status(401)
-      .json({ error: "NO_ACCOUNT", message: "No account found." });
+    throw { code: "NO_ACCOUNT", message: "No account found." };
   }
 
   const emailAccount = user.accounts.find((a) => a.provider === "email");
 
   if (!emailAccount) {
     const providers = user.accounts.map((a) => a.provider);
-    return res.status(401).json({
-      error: "WRONG_PROVIDER",
+    throw {
+      code: "WRONG_PROVIDER",
       message: `This account uses ${providers.join(" and ")} login.`,
       providers,
-    });
+    };
   }
 
   if (!emailAccount.passwordHash) {
-    return res.status(401).json({
-      error: "NO_PASSWORD",
+    throw {
+      code: "NO_PASSWORD",
       message: "No password set for this account.",
       suggestion: "RESET_PASSWORD",
-    });
+    };
   }
 
   const valid = await bcrypt.compare(password, emailAccount.passwordHash);
 
   if (!valid) {
-    return res
-      .status(401)
-      .json({ error: "WRONG_PASSWORD", message: "Incorrect password." });
+    throw { code: "WRONG_PASSWORD", message: "Incorrect password." };
   }
 
   return user;
@@ -300,12 +296,12 @@ export async function setPassword(userId, newPassword) {
 export async function getUserSessions(userId) {
   return db.session.findMany({
     where: { userId, expiresAt: { gt: new Date() } },
-    orderBy: { lastUsedAt: "desc" },
+    orderBy: { updatedAt: "desc" },
     select: {
       id: true,
       userAgent: true,
       ipAddress: true,
-      lastUsedAt: true,
+      updatedAt: true,
       createdAt: true,
       expiresAt: true,
     },

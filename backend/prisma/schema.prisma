@@ -47,7 +47,7 @@ model Session {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token     String   @unique @default(cuid())
+  token     String   @unique 
   expiresAt DateTime
   userAgent String?
   ipAddress String?

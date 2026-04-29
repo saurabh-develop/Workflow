@@ -1,65 +1,81 @@
 import jwt from "jsonwebtoken";
 import { db } from "../db";
+import crypto from "node:crypto";
 
 const ACCESS_SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const ACCESS_TTL = "15m";
 const REFRESH_TTL = "30d";
 
-export function signAccessToken(userId) {
-  return jwt.sign({ sub: userId, type: "access" }, ACCESS_SECRET, {
-    expiresIn: ACCESS_TTL,
-  });
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export async function issueTokens(userId, meta = {}) {
+export async function issueTokens(userId, meta = {}, tx = db) {
   const accessToken = signAccessToken(userId);
 
-  // Refresh token stored in DB — can be revoked
-  const session = await db.session.create({
+  const sessionId = crypto.randomUUID();
+
+  const rawRefreshToken = jwt.sign(
+    { sub: userId, sessionId, type: "refresh" },
+    REFRESH_SECRET,
+    { expiresIn: REFRESH_TTL },
+  );
+
+  await tx.session.create({
     data: {
+      id: sessionId,
       userId,
+      token: hashToken(rawRefreshToken),
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       userAgent: meta.userAgent,
       ipAddress: meta.ipAddress,
     },
   });
 
-  const refreshToken = jwt.sign(
-    { sub: userId, sessionId: session.id, type: "refresh" },
-    REFRESH_SECRET,
-    { expiresIn: REFRESH_TTL },
-  );
-
-  return { accessToken, refreshToken };
+  return { accessToken, refreshToken: rawRefreshToken };
 }
 
 export async function rotateRefreshToken(oldRefreshToken, meta = {}) {
   let payload;
   try {
     payload = jwt.verify(oldRefreshToken, REFRESH_SECRET);
+
+    if (payload.type !== "refresh") {
+      throw new Error("Invalid token type");
+    }
   } catch {
     throw new Error("Invalid refresh token");
   }
 
-  // Checking session still exists (not revoked)
-  const session = await db.session.findUnique({
-    where: { id: payload.sessionId },
+  const hashed = hashToken(oldRefreshToken);
+
+  return await db.$transaction(async (tx) => {
+    const session = await tx.session.findFirst({
+      where: {
+        id: payload.sessionId,
+        token: hashed,
+      },
+    });
+
+    if (!session || session.expiresAt < new Date()) {
+      throw new Error("Session expired or revoked");
+    }
+
+    // Delete old session
+    await tx.session.delete({
+      where: { id: payload.sessionId },
+    });
+
+    // Create new session + tokens (IMPORTANT: use tx)
+    return await issueTokens(payload.sub, meta, tx);
   });
-  if (!session || session.expiresAt < new Date()) {
-    throw new Error("Session expired or revoked");
-  }
-
-  // Delete old session, issue new tokens (rotation)
-  await db.session.delete({ where: { id: payload.sessionId } });
-  return issueTokens(payload.sub, meta);
 }
-
 export function verifyAccessToken(token) {
   try {
     return jwt.verify(token, ACCESS_SECRET);
   } catch (error) {
-    if (error === "TokenExpiredError") {
+    if (error.name === "TokenExpiredError") {
       throw {
         code: "TOKEN_EXPIRED",
         message: "Access token expired",

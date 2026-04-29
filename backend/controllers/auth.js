@@ -18,6 +18,8 @@ import {
 } from "../services/auth.service.js";
 import { authenticate } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
+import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
@@ -34,8 +36,12 @@ function handleError(res, err) {
 function getMeta(req) {
   return {
     userAgent: req.headers["user-agent"],
-    ipAddress: req.ip,
+    ipAddress: req.headers["x-forwarded-for"] || req.ip,
   };
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 // OAuth -- Google
@@ -156,7 +162,7 @@ router.post("/forgot-password", async (req, res) => {
     await requestPasswordReset(email);
     res.json({ message: "Reset code sent if account exists." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -178,7 +184,7 @@ router.post("/reset-password", async (req, res) => {
     await resetPassword(email, code, newPassword);
     res.json({ message: "Password reset successfully." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -198,7 +204,7 @@ router.post("/refresh", async (req, res) => {
     res.json({ accessToken: tokens.accessToken });
   } catch (err) {
     clearRefreshTokenCookie(res);
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -216,7 +222,7 @@ router.post("/set-password", authenticate, async (req, res) => {
     await setPassword(req.user.id, password);
     res.json({ message: "Password set successfully." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -225,35 +231,52 @@ router.post("/logout", authenticate, async (req, res) => {
     const token = req.cookies?.refreshToken;
 
     if (token) {
-      // Delete only the session linked to this refresh token
+      let payload;
+      try {
+        payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+      } catch {
+        // token invalid → just clear cookie
+        clearRefreshTokenCookie(res);
+        return res.json({ message: "Logged out." });
+      }
+
+      if (payload.type !== "refresh") {
+        clearRefreshTokenCookie(res);
+        return res.status(400).json({ message: "Invalid token type" });
+      }
+
       await db.session.deleteMany({
         where: {
-          refreshToken: token,
+          id: payload.sessionId,
+          token: hashToken(token),
           userId: req.user.id,
         },
       });
     }
 
     clearRefreshTokenCookie(res);
-
     res.json({ message: "Logged out from this device." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
 // Get profile
 
 router.get("/me", authenticate, async (req, res) => {
-  const user = await db.user.findUnique({
-    where: { id: req.user.id },
-    include: {
-      accounts: {
-        select: { provider: true, createdAt: true },
+  try {
+    const user = await db.user.findUnique({
+      where: { id: req.user.id },
+      include: {
+        accounts: {
+          select: { provider: true, createdAt: true },
+        },
       },
-    },
-  });
-  res.json(user);
+    });
+    res.json(user);
+  } catch (error) {
+    handleError(res, error);
+  }
 });
 
 router.patch("/me", authenticate, async (req, res) => {
@@ -265,7 +288,7 @@ router.patch("/me", authenticate, async (req, res) => {
     });
     res.json(user);
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -276,7 +299,7 @@ router.get("/sessions", authenticate, async (req, res) => {
     const sessions = await getUserSessions(req.user.id);
     res.json(sessions);
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -285,7 +308,7 @@ router.delete("/sessions/:id", authenticate, async (req, res) => {
     await revokeSession(req.params.id, req.user.id);
     res.json({ message: "Session revoked." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
@@ -295,7 +318,7 @@ router.delete("/sessions", authenticate, async (req, res) => {
     clearRefreshTokenCookie(res);
     res.json({ message: "All sessions revoked." });
   } catch (err) {
-    handleError(res, error);
+    handleError(res, err);
   }
 });
 
