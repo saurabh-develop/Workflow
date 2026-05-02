@@ -201,9 +201,22 @@ router.post("/refresh", async (req, res) => {
   }
 
   try {
-    const tokens = await rotateRefreshToken(token, getMeta(req));
-    setRefreshTokenCookie(res, tokens.refreshToken);
-    res.json({ accessToken: tokens.accessToken });
+    const { accessToken, refreshToken, userId } = await rotateRefreshToken(
+      token,
+      getMeta(req),
+    );
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatarUrl: true,
+        emailVerified: true,
+      },
+    });
+    setRefreshTokenCookie(res, refreshToken);
+    res.json({ accessToken, user });
   } catch (err) {
     clearRefreshTokenCookie(res);
 

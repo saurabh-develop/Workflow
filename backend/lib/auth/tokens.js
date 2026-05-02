@@ -68,13 +68,16 @@ export async function rotateRefreshToken(oldRefreshToken, meta = {}) {
       throw new Error("Session expired or revoked");
     }
 
-    // Delete old session
     await tx.session.delete({
       where: { id: payload.sessionId },
     });
 
-    // Create new session + tokens (IMPORTANT: use tx)
-    return await issueTokens(payload.sub, meta, tx);
+    const tokens = await issueTokens(payload.sub, meta, tx);
+
+    return {
+      ...tokens,
+      userId: payload.sub,
+    };
   });
 }
 export function verifyAccessToken(token) {
