@@ -14,7 +14,7 @@ export async function findOrCreateUser({
   name,
   avatarUrl,
 }) {
-  return await db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     // Checking if user with same provider exists
     const existingAccount = await tx.account.findUnique({
       where: { provider_providerAccountId: { provider, providerAccountId } },
@@ -57,17 +57,22 @@ export async function findOrCreateUser({
       include: { accounts: true },
     });
 
-    await sendWelcomeEmail(user.email, user.name || "");
-
     return { user, isNew: true, wasLinked: false };
   });
+
+  // Have to implement bullmq for emails
+
+  if (result.isNew) {
+    await sendWelcomeEmail(result.user.email, result.user.name || "");
+  }
+
+  return result;
 }
 
 // Email And Password
 
 export async function registerWithEmail(input) {
   const { email, password, name } = input;
-
   const existing = await db.user.findUnique({
     where: { email },
     include: { accounts: true },
@@ -108,8 +113,7 @@ export async function registerWithEmail(input) {
       },
     },
   });
-
-  await createAndSendOtp(user.id, user.email, "verifyEmail");
+  await createAndSendOtp(user.id, user.email, "verify_email");
 
   return user;
 }
@@ -160,7 +164,6 @@ export async function createAndSendOtp(userId, email, purpose) {
   await db.otpCode.deleteMany({
     where: { userId, purpose, usedAt: null },
   });
-
   const code = crypto.randomInt(100000, 999999).toString();
   const hash = await bcrypt.hash(code, 10);
 
@@ -172,9 +175,12 @@ export async function createAndSendOtp(userId, email, purpose) {
       expiresAt: new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000),
     },
   });
-
-  await sendOtpEmail(email, code, purpose);
-
+  try {
+    await sendOtpEmail(email, code, purpose);
+  } catch (err) {
+    console.error("EMAIL ERROR:", err);
+    throw err;
+  }
   return code;
 }
 
@@ -212,6 +218,33 @@ export async function verifyOtp(userId, rawCode, purpose) {
 
   return true;
 }
+
+export async function requestOtpLogin(email) {
+  let user = await db.user.findUnique({
+    where: { email },
+    include: { accounts: true },
+  });
+
+  if (!user) {
+    user = await db.user.create({
+      data: {
+        email,
+        emailVerified: false,
+        accounts: {
+          create: {
+            provider: AuthProvider.EMAIL,
+            providerAccountId: email,
+          },
+        },
+      },
+      include: { accounts: true },
+    });
+  }
+
+  await createAndSendOtp(user.id, user.email, "login");
+  return { message: "Code sent if account exists." };
+}
+
 // Password Reset
 
 export async function requestPasswordReset(email) {
@@ -296,12 +329,11 @@ export async function setPassword(userId, newPassword) {
 export async function getUserSessions(userId) {
   return db.session.findMany({
     where: { userId, expiresAt: { gt: new Date() } },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { createdAt: "desc" },
     select: {
       id: true,
       userAgent: true,
       ipAddress: true,
-      updatedAt: true,
       createdAt: true,
       expiresAt: true,
     },

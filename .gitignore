@@ -108,3 +108,4 @@ docker-data/
 # ------------------------------
 
 backend/generated/prisma
+backend/lib/generated/prisma

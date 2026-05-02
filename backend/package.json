@@ -10,6 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
@@ -23,7 +24,8 @@
     "otplib": "^13.4.0",
     "passport": "^0.7.0",
     "passport-github2": "^0.1.12",
-    "passport-google-oauth20": "^2.0.0"
+    "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -15,6 +15,8 @@ import {
   getUserSessions,
   revokeSession,
   revokeAllSessions,
+  requestOtpLogin,
+  verifyOtp,
 } from "../services/auth.service.js";
 import { authenticate } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
@@ -204,7 +206,11 @@ router.post("/refresh", async (req, res) => {
     res.json({ accessToken: tokens.accessToken });
   } catch (err) {
     clearRefreshTokenCookie(res);
-    handleError(res, err);
+
+    return res.status(401).json({
+      code: "TOKEN_INVALID",
+      message: "Invalid or expired refresh token",
+    });
   }
 });
 
@@ -323,3 +329,100 @@ router.delete("/sessions", authenticate, async (req, res) => {
 });
 
 export default router;
+
+router.post("/otp/send", async (req, res) => {
+  const { email, purpose = "login" } = req.body;
+  if (!email) {
+    return res
+      .status(400)
+      .json({ code: "VALIDATION", message: "email is required." });
+  }
+
+  try {
+    await requestOtpLogin(email);
+    res.json({ message: "Code sent if account exists." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/otp/verify", async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) {
+    return res
+      .status(400)
+      .json({ code: "VALIDATION", message: "email and code are required." });
+  }
+
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user) {
+      return res
+        .status(400)
+        .json({ code: "NO_ACCOUNT", message: "Account not found." });
+    }
+
+    await verifyOtp(user.id, code, "login");
+
+    if (!user.emailVerified) {
+      await db.user.update({
+        where: { id: user.id },
+        data: { emailVerified: true },
+      });
+    }
+
+    const tokens = await issueTokens(user.id, getMeta(req));
+    setRefreshTokenCookie(res, tokens.refreshToken);
+    res.json({
+      accessToken: tokens.accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        emailVerified: true,
+      },
+    });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// Email Verification
+
+router.post("/verify-email", async (req, res) => {
+  const { email, code } = req.body;
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user)
+      return res
+        .status(400)
+        .json({ code: "NO_ACCOUNT", message: "Account not found." });
+
+    await verifyOtp(user.id, code, "verify_email");
+    await db.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true },
+    });
+
+    res.json({ message: "Email verified." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/verify-email/resend", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user) return res.json({ message: "Code sent if account exists." });
+    if (user.emailVerified)
+      return res.json({ message: "Email already verified." });
+
+    const { createAndSendOtp } = await import("../services/auth.service");
+    await createAndSendOtp(user.id, user.email, "verify_email");
+    res.json({ message: "Verification code sent." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});

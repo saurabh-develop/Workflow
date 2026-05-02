@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { db } from "../db";
+import { db } from "../db.js";
 import crypto from "node:crypto";
 
 const ACCESS_SECRET = process.env.JWT_SECRET;
@@ -9,6 +9,12 @@ const REFRESH_TTL = "30d";
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function signAccessToken(userId) {
+  return jwt.sign({ sub: userId, type: "access" }, ACCESS_SECRET, {
+    expiresIn: ACCESS_TTL,
+  });
 }
 
 export async function issueTokens(userId, meta = {}, tx = db) {
@@ -94,10 +100,10 @@ export function setRefreshTokenCookie(res, token) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: 30 * 24 * 60 * 60 * 1000,
-    path: "/api/v1/auth",
+    path: "/",
   });
 }
 
 export function clearRefreshTokenCookie(res) {
-  res.clearCookie("refreshToken", { path: "/api/v1/auth" });
+  res.clearCookie("refreshToken", { path: "/" });
 }

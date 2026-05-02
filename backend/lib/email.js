@@ -33,7 +33,7 @@ export async function sendOtpEmail(email, code, purpose) {
   const subject =
     purpose === "login"
       ? "Your login code"
-      : purpose === "verifyEmail"
+      : purpose === "verify_email"
         ? "Verify your email"
         : "Reset your password";
 
