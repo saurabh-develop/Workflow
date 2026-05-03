@@ -3,15 +3,19 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 const globalForPrisma = globalThis;
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL,
+  maxUses: 100,
+  idleTimeout: 30,
+});
 
 export const db =
   globalForPrisma.prisma ||
   new PrismaClient({
     adapter,
     transactionOptions: {
-      maxWait: 10000, // default: 2000ms — time to wait to acquire a transaction
-      timeout: 30000, // default: 5000ms — max time a transaction can run
+      maxWait: 5000, // default: 2000ms — time to wait to acquire a transaction
+      timeout: 15000, // default: 5000ms — max time a transaction can run
     },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });

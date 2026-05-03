@@ -5,6 +5,7 @@ import {
   rotateRefreshToken,
   setRefreshTokenCookie,
   clearRefreshTokenCookie,
+  refreshAccessToken,
 } from "../lib/auth/tokens.js";
 import {
   registerWithEmail,
@@ -201,22 +202,30 @@ router.post("/refresh", async (req, res) => {
   }
 
   try {
-    const { accessToken, refreshToken, userId } = await rotateRefreshToken(
-      token,
-      getMeta(req),
-    );
-    const user = await db.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        avatarUrl: true,
-        emailVerified: true,
-      },
-    });
-    setRefreshTokenCookie(res, refreshToken);
-    res.json({ accessToken, user });
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    } catch (error) {
+      clearRefreshTokenCookie(res);
+      return res
+        .status(401)
+        .json({ code: "TOKEN_INVALID", message: "Invalid refresh token." });
+    }
+
+    const sevenDays = 7 * 24 * 60 * 60;
+    const shouldRotate = payload.exp - Date.now() / 1000 < sevenDays;
+
+    if (shouldRotate) {
+      const { accessToken, refreshToken } = await rotateRefreshToken(
+        token,
+        getMeta(req),
+      );
+      setRefreshTokenCookie(res, refreshToken);
+      return res.json({ accessToken });
+    }
+
+    const { accessToken } = refreshAccessToken(token);
+    res.json({ accessToken });
   } catch (err) {
     clearRefreshTokenCookie(res);
 
@@ -284,15 +293,7 @@ router.post("/logout", authenticate, async (req, res) => {
 
 router.get("/me", authenticate, async (req, res) => {
   try {
-    const user = await db.user.findUnique({
-      where: { id: req.user.id },
-      include: {
-        accounts: {
-          select: { provider: true, createdAt: true },
-        },
-      },
-    });
-    res.json(user);
+    res.json(req.user);
   } catch (error) {
     handleError(res, error);
   }

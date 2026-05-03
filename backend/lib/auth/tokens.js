@@ -42,6 +42,18 @@ export async function issueTokens(userId, meta = {}, tx = db) {
   return { accessToken, refreshToken: rawRefreshToken };
 }
 
+export function refreshAccessToken(refreshToken) {
+  let payload;
+  try {
+    payload = jwt.verify(refreshToken, REFRESH_SECRET);
+    if (payload.type !== "refresh") throw new Error();
+  } catch {
+    throw new Error("Invalid refresh token");
+  }
+  const accessToken = signAccessToken(payload.sub);
+  return { accessToken, userId: payload.sub };
+}
+
 export async function rotateRefreshToken(oldRefreshToken, meta = {}) {
   let payload;
   try {
@@ -72,12 +84,7 @@ export async function rotateRefreshToken(oldRefreshToken, meta = {}) {
       where: { id: payload.sessionId },
     });
 
-    const tokens = await issueTokens(payload.sub, meta, tx);
-
-    return {
-      ...tokens,
-      userId: payload.sub,
-    };
+    return await issueTokens(payload.sub, meta, tx);
   });
 }
 export function verifyAccessToken(token) {

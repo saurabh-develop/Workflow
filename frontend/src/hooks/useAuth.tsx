@@ -67,8 +67,9 @@ export function AuthProvider({ children }: Readonly<{ children: ReactNode }>) {
         console.log("Refresh failed:", await res.json().catch(() => ({})));
         return;
       }
-      const { accessToken, user } = await res.json();
+      const { accessToken } = await res.json();
       setAccessToken(accessToken);
+      const user = await authApi.me();
       setUser(user);
     } catch (err) {
       console.log("Refresh threw:", err);
