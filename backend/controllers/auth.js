@@ -1,0 +1,442 @@
+import express from "express";
+import passport from "../lib/auth/passport.js";
+import {
+  issueTokens,
+  rotateRefreshToken,
+  setRefreshTokenCookie,
+  clearRefreshTokenCookie,
+  refreshAccessToken,
+} from "../lib/auth/tokens.js";
+import {
+  registerWithEmail,
+  loginWithEmail,
+  requestPasswordReset,
+  resetPassword,
+  setPassword,
+  getUserSessions,
+  revokeSession,
+  revokeAllSessions,
+  requestOtpLogin,
+  verifyOtp,
+} from "../services/auth.service.js";
+import { authenticate } from "../middleware/auth.js";
+import { db } from "../lib/db.js";
+import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
+
+const router = express.Router();
+
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+function handleError(res, err) {
+  if (err?.code) return res.status(400).json(err);
+  console.error(err);
+  return res
+    .status(500)
+    .json({ code: "SERVER_ERROR", message: "Something went wrong." });
+}
+
+function getMeta(req) {
+  return {
+    userAgent: req.headers["user-agent"],
+    ipAddress: req.headers["x-forwarded-for"] || req.ip,
+  };
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+// OAuth -- Google
+
+router.get(
+  "/google",
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+    session: false,
+  }),
+);
+
+router.get(
+  "/google/callback",
+  passport.authenticate("google", {
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed`,
+  }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const tokens = await issueTokens(user.id, getMeta(req));
+      setRefreshTokenCookie(res, tokens.refreshToken);
+      res.redirect(
+        `${process.env.FRONTEND_URL}/auth/callback?token=${tokens.accessToken}`,
+      );
+    } catch (error) {
+      handleError(res, error);
+    }
+  },
+);
+
+// OAuth -- Github
+
+router.get("/github", passport.authenticate("github", { session: false }));
+
+router.get(
+  "/github/callback",
+  passport.authenticate("github", {
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed`,
+  }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const tokens = await issueTokens(user.id, getMeta(req));
+      setRefreshTokenCookie(res, tokens.refreshToken);
+      res.redirect(`${FRONTEND_URL}/auth/callback?token=${tokens.accessToken}`);
+    } catch (error) {
+      handleError(res, error);
+    }
+  },
+);
+
+// Email Password Register and Login
+
+router.post("/register", async (req, res) => {
+  const { email, name, password } = req.body;
+
+  if (!email || !password || !name) {
+    return res.status(400).json({
+      code: "VALIDATION",
+      message: "email, password and name are required.",
+    });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({
+      code: "VALIDATION",
+      message: "Password must be at least 8 characters.",
+    });
+  }
+
+  try {
+    const user = await registerWithEmail({ email, password, name });
+    res.status(201).json({
+      message: "Account created. Check your email to verify.",
+      userId: user.id,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({
+      code: "VALIDATION",
+      message: "email and password are required.",
+    });
+  }
+
+  try {
+    const user = await loginWithEmail({ email, password });
+    const tokens = await issueTokens(user.id, getMeta(req));
+    setRefreshTokenCookie(res, tokens.refreshToken);
+    res.json({
+      accessToken: tokens.accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        emailVerified: user.emailVerified,
+      },
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Password reset
+
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  try {
+    await requestPasswordReset(email);
+    res.json({ message: "Reset code sent if account exists." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res
+      .status(400)
+      .json({ code: "VALIDATION", message: "All fields required." });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({
+      code: "VALIDATION",
+      message: "Password must be at least 8 characters.",
+    });
+  }
+
+  try {
+    await resetPassword(email, code, newPassword);
+    res.json({ message: "Password reset successfully." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// Token refresh
+
+router.post("/refresh", async (req, res) => {
+  const token = req.cookies?.refreshToken;
+  if (!token) {
+    return res
+      .status(401)
+      .json({ code: "TOKEN_INVALID", message: "No refresh token." });
+  }
+
+  try {
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    } catch (error) {
+      clearRefreshTokenCookie(res);
+      return res
+        .status(401)
+        .json({ code: "TOKEN_INVALID", message: "Invalid refresh token." });
+    }
+
+    const sevenDays = 7 * 24 * 60 * 60;
+    const shouldRotate = payload.exp - Date.now() / 1000 < sevenDays;
+
+    if (shouldRotate) {
+      const { accessToken, refreshToken } = await rotateRefreshToken(
+        token,
+        getMeta(req),
+      );
+      setRefreshTokenCookie(res, refreshToken);
+      return res.json({ accessToken });
+    }
+
+    const { accessToken } = refreshAccessToken(token);
+    res.json({ accessToken });
+  } catch (err) {
+    clearRefreshTokenCookie(res);
+
+    return res.status(401).json({
+      code: "TOKEN_INVALID",
+      message: "Invalid or expired refresh token",
+    });
+  }
+});
+
+// Set password For OAuth user who havent set password and wanted to login with email and password
+
+router.post("/set-password", authenticate, async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 8) {
+    return res.status(400).json({
+      code: "VALIDATION",
+      message: "Password must be at least 8 characters.",
+    });
+  }
+  try {
+    await setPassword(req.user.id, password);
+    res.json({ message: "Password set successfully." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/logout", authenticate, async (req, res) => {
+  try {
+    const token = req.cookies?.refreshToken;
+
+    if (token) {
+      let payload;
+      try {
+        payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+      } catch {
+        // token invalid → just clear cookie
+        clearRefreshTokenCookie(res);
+        return res.json({ message: "Logged out." });
+      }
+
+      if (payload.type !== "refresh") {
+        clearRefreshTokenCookie(res);
+        return res.status(400).json({ message: "Invalid token type" });
+      }
+
+      await db.session.deleteMany({
+        where: {
+          id: payload.sessionId,
+          token: hashToken(token),
+          userId: req.user.id,
+        },
+      });
+    }
+
+    clearRefreshTokenCookie(res);
+    res.json({ message: "Logged out from this device." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// Get profile
+
+router.get("/me", authenticate, async (req, res) => {
+  try {
+    res.json(req.user);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+router.patch("/me", authenticate, async (req, res) => {
+  const { name, avatarUrl } = req.body;
+  try {
+    const user = await db.user.update({
+      where: { id: req.user.id },
+      data: { name, avatarUrl },
+    });
+    res.json(user);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// Sessions
+
+router.get("/sessions", authenticate, async (req, res) => {
+  try {
+    const sessions = await getUserSessions(req.user.id);
+    res.json(sessions);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.delete("/sessions/:id", authenticate, async (req, res) => {
+  try {
+    await revokeSession(req.params.id, req.user.id);
+    res.json({ message: "Session revoked." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.delete("/sessions", authenticate, async (req, res) => {
+  try {
+    await revokeAllSessions(req.user.id);
+    clearRefreshTokenCookie(res);
+    res.json({ message: "All sessions revoked." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+export default router;
+
+router.post("/otp/send", async (req, res) => {
+  const { email, purpose = "login" } = req.body;
+  if (!email) {
+    return res
+      .status(400)
+      .json({ code: "VALIDATION", message: "email is required." });
+  }
+
+  try {
+    await requestOtpLogin(email);
+    res.json({ message: "Code sent if account exists." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/otp/verify", async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) {
+    return res
+      .status(400)
+      .json({ code: "VALIDATION", message: "email and code are required." });
+  }
+
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user) {
+      return res
+        .status(400)
+        .json({ code: "NO_ACCOUNT", message: "Account not found." });
+    }
+
+    await verifyOtp(user.id, code, "login");
+
+    if (!user.emailVerified) {
+      await db.user.update({
+        where: { id: user.id },
+        data: { emailVerified: true },
+      });
+    }
+
+    const tokens = await issueTokens(user.id, getMeta(req));
+    setRefreshTokenCookie(res, tokens.refreshToken);
+    res.json({
+      accessToken: tokens.accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        emailVerified: true,
+      },
+    });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// Email Verification
+
+router.post("/verify-email", async (req, res) => {
+  const { email, code } = req.body;
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user)
+      return res
+        .status(400)
+        .json({ code: "NO_ACCOUNT", message: "Account not found." });
+
+    await verifyOtp(user.id, code, "verify_email");
+    await db.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true },
+    });
+
+    res.json({ message: "Email verified." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post("/verify-email/resend", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user) return res.json({ message: "Code sent if account exists." });
+    if (user.emailVerified)
+      return res.json({ message: "Email already verified." });
+
+    const { createAndSendOtp } = await import("../services/auth.service");
+    await createAndSendOtp(user.id, user.email, "verify_email");
+    res.json({ message: "Verification code sent." });
+  } catch (err) {
+    handleError(res, err);
+  }
+});

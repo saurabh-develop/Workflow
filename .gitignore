@@ -100,3 +100,12 @@ docker-data/
 .tmp/
 .cache/
 .eslintcache
+
+# ------------------------------
+
+# Prisma
+
+# ------------------------------
+
+backend/generated/prisma
+backend/lib/generated/prisma
